@@ -17,8 +17,8 @@ class GistStorage {
         this.retryDelay = 1000; // Start with 1 second
         
         // Version management
-        this.currentAppVersion = '1.2.0'; // Incremented for historical meal loading feature
-        this.dataVersion = '1.0.0'; // Increment when data structure changes
+        this.currentAppVersion = '1.3.0'; // Incremented for new features
+        this.dataVersion = '1.1.0'; // Incremented for new data structure
         
         // Encryption key for token storage
         this.encryptionKey = this.getOrCreateEncryptionKey();
@@ -78,6 +78,7 @@ class GistStorage {
             const token = await this.promptForToken();
             
             if (token) {
+                // Encrypt token before storing
                 this.token = token;
                 const authSuccess = await this.verifyAuthentication();
                 
@@ -293,7 +294,7 @@ class GistStorage {
     // Local storage with IndexedDB
     async initializeLocalDB() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open('NutriSnapSync', 2);
+            const request = indexedDB.open('NutriSnapSync', 3); // Increased version for new fields
             
             request.onerror = () => reject(request.error);
             request.onsuccess = () => {
@@ -309,22 +310,107 @@ class GistStorage {
                     const mealStore = db.createObjectStore('meals', { keyPath: 'id' });
                     mealStore.createIndex('syncStatus', 'syncStatus');
                     mealStore.createIndex('timestamp', 'timestamp');
-                    // Add date index for historical meal loading
+                    mealStore.createIndex('mealTime', 'mealTime'); // For editable meal time
                     mealStore.createIndex('date', 'date');
+                } else if (event.oldVersion < 3) {
+                    // Add new indexes for existing store if upgrading
+                    const transaction = event.target.transaction;
+                    const mealStore = transaction.objectStore('meals');
+                    
+                    // Add mealTime index if it doesn't exist
+                    if (!mealStore.indexNames.contains('mealTime')) {
+                        mealStore.createIndex('mealTime', 'mealTime');
+                    }
                 }
                 
                 // Photos store (separate for efficiency)
                 if (!db.objectStoreNames.contains('photos')) {
                     const photoStore = db.createObjectStore('photos', { keyPath: 'id' });
                     photoStore.createIndex('mealId', 'mealId');
+                } else if (event.oldVersion < 3) {
+                    // Update existing photos store for new fields
+                    const transaction = event.target.transaction;
+                    const photoStore = transaction.objectStore('photos');
+                    
+                    // We don't need to add indexes for notes and consumptionPercentage
+                    // as they're part of the photo object, not separate indexes
                 }
                 
                 // Sync metadata
                 if (!db.objectStoreNames.contains('syncMeta')) {
                     db.createObjectStore('syncMeta', { keyPath: 'key' });
                 }
+                
+                // Migrate existing data if needed
+                if (event.oldVersion > 0 && event.oldVersion < 3) {
+                    this.migrateData(event.target.transaction);
+                }
             };
         });
+    }
+    
+    // Migrate existing data to new schema
+    async migrateData(transaction) {
+        console.log('Migrating data to new schema...');
+        
+        const mealStore = transaction.objectStore('meals');
+        const photoStore = transaction.objectStore('photos');
+        
+        // Get all meals
+        const mealRequest = mealStore.openCursor();
+        
+        mealRequest.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                const meal = cursor.value;
+                
+                // Add mealTime if it doesn't exist
+                if (!meal.mealTime) {
+                    meal.mealTime = meal.timestamp;
+                }
+                
+                // Update photos to include notes and consumption percentage
+                if (meal.photos) {
+                    meal.photos = meal.photos.map(photo => {
+                        if (!photo.notes) {
+                            photo.notes = '';
+                        }
+                        if (!photo.consumptionPercentage) {
+                            photo.consumptionPercentage = 100;
+                        }
+                        return photo;
+                    });
+                }
+                
+                // Update the meal
+                cursor.update(meal);
+                cursor.continue();
+            }
+        };
+        
+        // Get all photos
+        const photoRequest = photoStore.openCursor();
+        
+        photoRequest.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                const photo = cursor.value;
+                
+                // Add notes and consumption percentage if they don't exist
+                if (!photo.notes) {
+                    photo.notes = '';
+                }
+                if (!photo.consumptionPercentage) {
+                    photo.consumptionPercentage = 100;
+                }
+                
+                // Update the photo
+                cursor.update(photo);
+                cursor.continue();
+            }
+        };
+        
+        console.log('Data migration completed');
     }
     
     // Save meal locally with sync queue
@@ -339,7 +425,7 @@ class GistStorage {
             meal.localSaveTime = new Date().toISOString();
             
             // Extract date for easier querying
-            const mealDate = new Date(meal.timestamp).toISOString().split('T')[0];
+            const mealDate = new Date(meal.mealTime).toISOString().split('T')[0];
             meal.date = mealDate;
             
             // Save meal
@@ -350,10 +436,10 @@ class GistStorage {
                 await photoStore.put({
                     id: photo.id,
                     mealId: meal.id,
-                    type: photo.type,
-                    dataUrl: photo.dataUrl,
-                    metadata: photo.metadata,
-                    analysis: photo.analysis
+                    data: photo.data,
+                    isMenu: photo.isMenu,
+                    notes: photo.notes || '',
+                    consumptionPercentage: photo.consumptionPercentage || 100
                 });
             }
             
@@ -416,28 +502,29 @@ class GistStorage {
             console.log('Sync completed successfully');
             
             // Notify UI
-            this.notifySyncStatus('synced', { mealsSynced: pendingMeals.length });
-            
+            this.notifySyncStatus('synced');
         } catch (error) {
-            console.error('Sync failed:', error);
+            console.error('Sync error:', error);
             
-            // Handle different error types
-            if (error.name === 'NetworkError' || error.message.includes('network')) {
-                this.handleOffline();
-            } else if (error.status === 401) {
-                this.handleAuthError(error);
-            } else if (error.status === 403) {
-                // Rate limit - exponential backoff
-                this.handleRateLimit(error);
+            // Implement exponential backoff
+            this.retryCount++;
+            if (this.retryCount <= this.maxRetries) {
+                const delay = this.retryDelay * Math.pow(2, this.retryCount - 1);
+                console.log(`Retrying sync in ${delay}ms (attempt ${this.retryCount})`);
+                
+                setTimeout(() => {
+                    this.syncData();
+                }, delay);
             } else {
-                // General error
-                this.retryWithBackoff();
+                this.showError('Sync failed after multiple attempts. Will try again later.');
+                this.notifySyncStatus('error', error.message);
             }
         } finally {
             this.syncInProgress = false;
         }
     }
     
+    // Fetch data from GitHub Gist
     async fetchGistData() {
         try {
             const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
@@ -448,7 +535,7 @@ class GistStorage {
             });
             
             if (!response.ok) {
-                throw { status: response.status, message: `GitHub API error: ${response.status}` };
+                throw new Error(`GitHub API error: ${response.status}`);
             }
             
             const gist = await response.json();
@@ -459,103 +546,142 @@ class GistStorage {
                 throw new Error('Data file not found in gist');
             }
             
-            const data = JSON.parse(dataFile.content);
-            return data;
+            const dataContent = await fetch(dataFile.raw_url).then(res => res.json());
+            
+            // Parse photos file
+            const photosFile = gist.files['nutrisnap-photos.json'];
+            let photosContent = {};
+            
+            if (photosFile) {
+                photosContent = await fetch(photosFile.raw_url).then(res => res.json());
+            }
+            
+            return {
+                data: dataContent,
+                photos: photosContent,
+                gistEtag: response.headers.get('ETag')
+            };
         } catch (error) {
             console.error('Error fetching gist data:', error);
             throw error;
         }
     }
     
+    // Get pending meals from IndexedDB
     async getPendingMeals() {
         return new Promise((resolve, reject) => {
-            const transaction = this.localDB.transaction(['meals'], 'readonly');
+            const transaction = this.localDB.transaction(['meals', 'photos'], 'readonly');
             const mealStore = transaction.objectStore('meals');
-            const index = mealStore.index('syncStatus');
-            const request = index.getAll('pending');
+            const photoStore = transaction.objectStore('photos');
             
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
-    }
-    
-    async mergeData(remoteData, localMeals) {
-        // Create a copy of remote data
-        const mergedData = JSON.parse(JSON.stringify(remoteData));
-        
-        // Update app version
-        mergedData.appVersion = this.currentAppVersion;
-        mergedData.lastModified = new Date().toISOString();
-        
-        // Create a map of existing meals by ID for quick lookup
-        const mealMap = {};
-        mergedData.meals.forEach(meal => {
-            mealMap[meal.id] = true;
-        });
-        
-        // Add local meals that don't exist in remote, or update existing ones
-        localMeals.forEach(meal => {
-            // If meal exists, find and replace it
-            const existingIndex = mergedData.meals.findIndex(m => m.id === meal.id);
+            const pendingIndex = mealStore.index('syncStatus');
+            const request = pendingIndex.getAll('pending');
             
-            if (existingIndex >= 0) {
-                mergedData.meals[existingIndex] = meal;
-            } else {
-                mergedData.meals.push(meal);
-            }
-        });
-        
-        // Update stats
-        mergedData.stats.totalMeals = mergedData.meals.length;
-        mergedData.stats.totalPhotos = mergedData.meals.reduce((sum, meal) => sum + meal.photos.length, 0);
-        
-        // Sort meals by timestamp (newest first)
-        mergedData.meals.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        
-        // Update first/last meal timestamps
-        if (mergedData.meals.length > 0) {
-            mergedData.stats.firstMeal = mergedData.meals[mergedData.meals.length - 1].timestamp;
-            mergedData.stats.lastMeal = mergedData.meals[0].timestamp;
-        }
-        
-        return mergedData;
-    }
-    
-    async updateGist(data) {
-        try {
-            // Split data if it's too large
-            const chunks = this.chunkData(data);
-            
-            // Prepare files object
-            const files = {};
-            
-            // Main data file
-            files['nutrisnap-data.json'] = {
-                content: JSON.stringify({
-                    ...data,
-                    meals: chunks.length > 1 ? [] : data.meals // Empty if chunked
-                }, null, 2)
+            request.onsuccess = async () => {
+                const pendingMeals = request.result;
+                
+                // Load photos for each meal
+                for (const meal of pendingMeals) {
+                    const photoIndex = photoStore.index('mealId');
+                    const photoRequest = photoIndex.getAll(meal.id);
+                    
+                    await new Promise(resolve => {
+                        photoRequest.onsuccess = () => {
+                            meal.photos = photoRequest.result;
+                            resolve();
+                        };
+                        photoRequest.onerror = () => {
+                            console.error('Error loading photos for meal:', meal.id);
+                            meal.photos = [];
+                            resolve();
+                        };
+                    });
+                }
+                
+                resolve(pendingMeals);
             };
             
-            // Add chunks if needed
-            chunks.forEach((chunk, index) => {
-                files[`meals-chunk-${index}.json`] = {
-                    content: JSON.stringify(chunk, null, 2)
+            request.onerror = () => {
+                reject(request.error);
+            };
+        });
+    }
+    
+    // Merge local and remote data
+    async mergeData(remoteData, localMeals) {
+        const { data, photos } = remoteData;
+        
+        // Create a map of remote meals by ID
+        const remoteMealsMap = {};
+        data.meals.forEach(meal => {
+            remoteMealsMap[meal.id] = meal;
+        });
+        
+        // Add or update local meals in remote data
+        localMeals.forEach(localMeal => {
+            // Local changes win over remote
+            remoteMealsMap[localMeal.id] = localMeal;
+            
+            // Add photos to photos object
+            localMeal.photos.forEach(photo => {
+                photos[photo.id] = {
+                    mealId: localMeal.id,
+                    data: photo.data,
+                    isMenu: photo.isMenu,
+                    notes: photo.notes || '',
+                    consumptionPercentage: photo.consumptionPercentage || 100
                 };
             });
+        });
+        
+        // Rebuild meals array
+        data.meals = Object.values(remoteMealsMap);
+        
+        // Update metadata
+        data.lastModified = new Date().toISOString();
+        data.stats.totalMeals = data.meals.length;
+        data.stats.totalPhotos = Object.keys(photos).length;
+        
+        if (data.meals.length > 0) {
+            // Sort meals by timestamp
+            data.meals.sort((a, b) => a.timestamp - b.timestamp);
+            data.stats.firstMeal = data.meals[0].timestamp;
+            data.stats.lastMeal = data.meals[data.meals.length - 1].timestamp;
+        }
+        
+        return { data, photos };
+    }
+    
+    // Update gist with merged data
+    async updateGist(mergedData) {
+        const { data, photos } = mergedData;
+        
+        try {
+            // Split data into chunks if needed
+            const dataStr = JSON.stringify(data, null, 2);
+            const photosStr = JSON.stringify(photos, null, 2);
             
-            // Update sync log
-            files['sync-log.json'] = {
-                content: JSON.stringify({
-                    syncHistory: [
-                        {
-                            timestamp: new Date().toISOString(),
-                            device: this.generateDeviceId(),
-                            mealCount: data.meals.length
-                        }
-                    ],
-                    lastSync: new Date().toISOString()
-                }, null, 2)
+            // Check if we need to split photos (GitHub has a file size limit)
+            const files = {
+                'nutrisnap-data.json': {
+                    content: dataStr
+                },
+                'nutrisnap-photos.json': {
+                    content: photosStr
+                },
+                'sync-log.json': {
+                    content: JSON.stringify({
+                        syncHistory: [
+                            {
+                                timestamp: new Date().toISOString(),
+                                device: this.generateDeviceId(),
+                                mealsCount: data.meals.length,
+                                photosCount: Object.keys(photos).length
+                            }
+                        ],
+                        lastSync: new Date().toISOString()
+                    }, null, 2)
+                }
             };
             
             // Update gist
@@ -566,11 +692,13 @@ class GistStorage {
                     'Accept': 'application/vnd.github.v3+json',
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ files })
+                body: JSON.stringify({
+                    files: files
+                })
             });
             
             if (!response.ok) {
-                throw { status: response.status, message: `GitHub API error: ${response.status}` };
+                throw new Error(`GitHub API error: ${response.status}`);
             }
             
             return true;
@@ -580,405 +708,358 @@ class GistStorage {
         }
     }
     
-    chunkData(data) {
-        const meals = [...data.meals];
-        
-        // If data is small enough, no need to chunk
-        const dataSize = JSON.stringify(meals).length;
-        if (dataSize < 900000) { // GitHub has a 1MB limit, stay under it
-            return [meals];
-        }
-        
-        // Need to chunk data
-        const chunks = [];
-        let currentChunk = [];
-        let currentSize = 0;
-        
-        for (const meal of meals) {
-            const mealSize = JSON.stringify(meal).length;
-            
-            // If adding this meal would exceed chunk size, start a new chunk
-            if (currentSize + mealSize > 900000) {
-                chunks.push(currentChunk);
-                currentChunk = [meal];
-                currentSize = mealSize;
-            } else {
-                currentChunk.push(meal);
-                currentSize += mealSize;
-            }
-        }
-        
-        // Add the last chunk if it has items
-        if (currentChunk.length > 0) {
-            chunks.push(currentChunk);
-        }
-        
-        return chunks;
-    }
-    
+    // Mark meals as synced in IndexedDB
     async markMealsSynced(meals) {
-        const transaction = this.localDB.transaction(['meals'], 'readwrite');
-        const mealStore = transaction.objectStore('meals');
-        
-        for (const meal of meals) {
-            meal.syncStatus = 'synced';
-            meal.syncTime = new Date().toISOString();
-            await mealStore.put(meal);
+        return new Promise((resolve, reject) => {
+            const transaction = this.localDB.transaction(['meals'], 'readwrite');
+            const mealStore = transaction.objectStore('meals');
             
-            // Remove from sync queue
-            const index = this.syncQueue.indexOf(meal.id);
-            if (index >= 0) {
-                this.syncQueue.splice(index, 1);
+            let completed = 0;
+            
+            meals.forEach(meal => {
+                const request = mealStore.get(meal.id);
+                
+                request.onsuccess = () => {
+                    const storedMeal = request.result;
+                    if (storedMeal) {
+                        storedMeal.syncStatus = 'synced';
+                        storedMeal.lastSynced = new Date().toISOString();
+                        
+                        const updateRequest = mealStore.put(storedMeal);
+                        
+                        updateRequest.onsuccess = () => {
+                            completed++;
+                            if (completed === meals.length) {
+                                resolve();
+                            }
+                        };
+                        
+                        updateRequest.onerror = () => {
+                            reject(updateRequest.error);
+                        };
+                    } else {
+                        completed++;
+                        if (completed === meals.length) {
+                            resolve();
+                        }
+                    }
+                };
+                
+                request.onerror = () => {
+                    reject(request.error);
+                };
+            });
+            
+            // Handle empty array
+            if (meals.length === 0) {
+                resolve();
             }
-        }
-        
-        this.saveSyncQueue();
-        
-        return new Promise((resolve, reject) => {
-            transaction.oncomplete = () => resolve();
-            transaction.onerror = () => reject(transaction.error);
         });
     }
     
+    // Update sync metadata
     async updateSyncMetadata() {
-        const transaction = this.localDB.transaction(['syncMeta'], 'readwrite');
-        const metaStore = transaction.objectStore('syncMeta');
-        
-        await metaStore.put({
-            key: 'lastSync',
-            value: this.lastSyncTime
-        });
-        
         return new Promise((resolve, reject) => {
-            transaction.oncomplete = () => resolve();
-            transaction.onerror = () => reject(transaction.error);
+            const transaction = this.localDB.transaction(['syncMeta'], 'readwrite');
+            const metaStore = transaction.objectStore('syncMeta');
+            
+            const request = metaStore.put({
+                key: 'lastSync',
+                value: this.lastSyncTime
+            });
+            
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
         });
     }
     
-    // Error handling and retry logic
-    handleAuthError(error) {
-        console.error('Authentication error:', error);
-        this.showError('Authentication failed. Please re-authenticate.');
-        this.clearAuth();
-        this.notifySyncStatus('error', { message: 'Authentication failed' });
-    }
-    
-    handleRateLimit(error) {
-        console.error('Rate limit exceeded:', error);
-        this.showError('GitHub API rate limit exceeded. Please try again later.');
-        this.notifySyncStatus('error', { message: 'Rate limit exceeded' });
-    }
-    
-    retryWithBackoff() {
-        if (this.retryCount < this.maxRetries) {
-            this.retryCount++;
-            const delay = this.retryDelay * Math.pow(2, this.retryCount - 1);
-            console.log(`Retrying sync in ${delay}ms (attempt ${this.retryCount})`);
-            
-            setTimeout(() => {
-                this.syncData();
-            }, delay);
-        } else {
-            console.error('Max retry attempts reached');
-            this.showError('Sync failed after multiple attempts. Please try again later.');
-            this.notifySyncStatus('error', { message: 'Max retry attempts reached' });
-            this.retryCount = 0;
-        }
-    }
-    
+    // Handle online event
     handleOnline() {
-        console.log('Device is online');
+        console.log('Device is online, checking for pending syncs...');
         
-        // If we have pending items and we're authenticated, try to sync
-        if (this.syncQueue.length > 0 && this.token) {
+        // Update UI
+        this.notifySyncStatus('online');
+        
+        // Attempt to sync if authenticated
+        if (this.token && this.gistId) {
             this.syncData();
         }
-        
-        // Notify UI
-        this.notifySyncStatus('online');
     }
     
+    // Handle offline event
     handleOffline() {
-        console.log('Device is offline');
+        console.log('Device is offline, sync paused');
         
-        // Notify UI
+        // Update UI
         this.notifySyncStatus('offline');
     }
     
-    // Public API
-    async saveMeal(meal) {
-        // Save to local storage first
-        const saveResult = await this.saveMealLocally(meal);
-        
-        // Return result with sync status
-        return {
-            success: saveResult,
-            pendingSync: !navigator.onLine || !this.token
-        };
-    }
-    
-    // New method for historical meal loading
-    async getMealsByDate(dateString) {
-        try {
-            // First check local database
-            const localMeals = await this.getLocalMealsByDate(dateString);
-            
-            // If we're online and authenticated, also check cloud
-            if (navigator.onLine && this.token && this.gistId) {
-                try {
-                    const cloudMeals = await this.getCloudMealsByDate(dateString);
-                    
-                    // Merge local and cloud meals, removing duplicates
-                    const allMeals = [...localMeals];
-                    const localIds = new Set(localMeals.map(m => m.id));
-                    
-                    for (const meal of cloudMeals) {
-                        if (!localIds.has(meal.id)) {
-                            allMeals.push(meal);
-                        }
-                    }
-                    
-                    // Sort by timestamp (newest first)
-                    allMeals.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                    
-                    return allMeals;
-                } catch (error) {
-                    console.error('Error fetching cloud meals:', error);
-                    // Fall back to local meals only
-                    return localMeals;
-                }
-            }
-            
-            return localMeals;
-        } catch (error) {
-            console.error('Error getting meals by date:', error);
-            this.showError('Failed to load meals for the selected date.');
-            return [];
-        }
-    }
-    
-    async getLocalMealsByDate(dateString) {
-        return new Promise((resolve, reject) => {
-            if (!this.localDB) {
-                reject(new Error('Local database not initialized'));
-                return;
-            }
-            
-            const transaction = this.localDB.transaction(['meals'], 'readonly');
-            const mealStore = transaction.objectStore('meals');
-            
-            // Use the date index if available
-            if (mealStore.indexNames.contains('date')) {
-                const dateIndex = mealStore.index('date');
-                const request = dateIndex.getAll(dateString);
-                
-                request.onsuccess = () => {
-                    resolve(request.result || []);
-                };
-                
-                request.onerror = () => {
-                    reject(request.error);
-                };
-            } else {
-                // Fallback to filtering all meals
-                const request = mealStore.getAll();
-                
-                request.onsuccess = () => {
-                    const meals = request.result || [];
-                    const filteredMeals = meals.filter(meal => {
-                        const mealDate = new Date(meal.timestamp).toISOString().split('T')[0];
-                        return mealDate === dateString;
-                    });
-                    resolve(filteredMeals);
-                };
-                
-                request.onerror = () => {
-                    reject(request.error);
-                };
-            }
-        });
-    }
-    
-    async getCloudMealsByDate(dateString) {
-        try {
-            // Fetch all gist data
-            const gistData = await this.fetchGistData();
-            
-            // Get meals from main data and chunks
-            let allMeals = [...gistData.meals];
-            
-            // If data is chunked, fetch all chunks
-            if (gistData.meals.length === 0) {
-                const gist = await fetch(`https://api.github.com/gists/${this.gistId}`, {
-                    headers: {
-                        'Authorization': `token ${this.token}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                }).then(res => res.json());
-                
-                // Find all chunk files
-                const chunkFiles = Object.keys(gist.files)
-                    .filter(name => name.startsWith('meals-chunk-'))
-                    .map(name => gist.files[name]);
-                
-                // Fetch and parse each chunk
-                for (const file of chunkFiles) {
-                    const chunkContent = await fetch(file.raw_url).then(res => res.json());
-                    allMeals = [...allMeals, ...chunkContent];
-                }
-            }
-            
-            // Filter meals by date
-            return allMeals.filter(meal => {
-                const mealDate = new Date(meal.timestamp).toISOString().split('T')[0];
-                return mealDate === dateString;
-            });
-        } catch (error) {
-            console.error('Error fetching cloud meals by date:', error);
-            throw error;
-        }
-    }
-    
-    // Helper methods
-    isAuthenticated() {
-        return !!this.token;
-    }
-    
-    getSyncStatus() {
-        return {
-            authenticated: !!this.token,
-            online: navigator.onLine,
-            syncInProgress: this.syncInProgress,
-            pendingItems: this.syncQueue.length,
-            lastSync: this.lastSyncTime
-        };
-    }
-    
-    async enableCloudBackup() {
-        return await this.authenticate();
-    }
-    
-    notifySyncStatus(status, detail = {}) {
-        window.dispatchEvent(new CustomEvent('sync-status-changed', {
-            detail: {
-                status,
-                ...detail,
-                timestamp: new Date().toISOString()
-            }
-        }));
-    }
-    
-    showError(message) {
-        window.dispatchEvent(new CustomEvent('gist-sync-error', {
-            detail: {
-                message,
-                timestamp: new Date().toISOString()
-            }
-        }));
-    }
-    
-    // Secure token storage
-    getOrCreateEncryptionKey() {
-        let key = localStorage.getItem('nutrisnap_encryption_key');
-        if (!key) {
-            // Generate a random key
-            const array = new Uint8Array(32);
-            window.crypto.getRandomValues(array);
-            key = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
-            localStorage.setItem('nutrisnap_encryption_key', key);
-        }
-        return key;
-    }
-    
-    encryptToken(token) {
-        // Simple XOR encryption (in production, use a proper encryption library)
-        const key = this.encryptionKey;
-        let result = '';
-        
-        for (let i = 0; i < token.length; i++) {
-            const charCode = token.charCodeAt(i) ^ key.charCodeAt(i % key.length);
-            result += String.fromCharCode(charCode);
-        }
-        
-        return btoa(result); // Base64 encode
-    }
-    
-    decryptToken(encrypted) {
-        if (!encrypted) return null;
-        
-        try {
-            const key = this.encryptionKey;
-            const decoded = atob(encrypted); // Base64 decode
-            let result = '';
-            
-            for (let i = 0; i < decoded.length; i++) {
-                const charCode = decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length);
-                result += String.fromCharCode(charCode);
-            }
-            
-            return result;
-        } catch (error) {
-            console.error('Error decrypting token:', error);
-            return null;
-        }
-    }
-    
-    saveAuth() {
-        const encryptedToken = this.encryptToken(this.token);
-        
-        localStorage.setItem('nutrisnap_auth', JSON.stringify({
-            token: encryptedToken,
-            username: this.username,
-            gistId: this.gistId,
-            timestamp: new Date().toISOString()
-        }));
-    }
-    
-    getStoredAuth() {
-        const auth = localStorage.getItem('nutrisnap_auth');
-        if (!auth) return null;
-        
-        try {
-            const parsed = JSON.parse(auth);
-            return {
-                ...parsed,
-                token: this.decryptToken(parsed.token)
-            };
-        } catch (error) {
-            console.error('Error parsing stored auth:', error);
-            return null;
-        }
-    }
-    
-    clearAuth() {
-        localStorage.removeItem('nutrisnap_auth');
-        this.token = null;
-        this.username = null;
-        this.gistId = null;
-    }
-    
-    // Persistence for sync queue
-    saveSyncQueue() {
-        localStorage.setItem('nutrisnap_sync_queue', JSON.stringify(this.syncQueue));
-    }
-    
+    // Load sync queue from localStorage
     loadSyncQueue() {
         try {
-            const queue = localStorage.getItem('nutrisnap_sync_queue');
-            this.syncQueue = queue ? JSON.parse(queue) : [];
+            const queueStr = localStorage.getItem('nutrisnap_sync_queue');
+            if (queueStr) {
+                this.syncQueue = JSON.parse(queueStr);
+            }
         } catch (error) {
             console.error('Error loading sync queue:', error);
             this.syncQueue = [];
         }
     }
     
-    // Device identification
+    // Save sync queue to localStorage
+    saveSyncQueue() {
+        try {
+            localStorage.setItem('nutrisnap_sync_queue', JSON.stringify(this.syncQueue));
+        } catch (error) {
+            console.error('Error saving sync queue:', error);
+        }
+    }
+    
+    // Get stored authentication data
+    getStoredAuth() {
+        try {
+            const authStr = localStorage.getItem('nutrisnap_auth');
+            if (!authStr) return null;
+            
+            // Decrypt the stored auth data
+            const decrypted = this.decrypt(authStr, this.encryptionKey);
+            return JSON.parse(decrypted);
+        } catch (error) {
+            console.error('Error getting stored auth:', error);
+            return null;
+        }
+    }
+    
+    // Save authentication data
+    saveAuth() {
+        try {
+            const authData = {
+                token: this.token,
+                username: this.username,
+                gistId: this.gistId,
+                timestamp: Date.now()
+            };
+            
+            // Encrypt the auth data before storing
+            const encrypted = this.encrypt(JSON.stringify(authData), this.encryptionKey);
+            localStorage.setItem('nutrisnap_auth', encrypted);
+        } catch (error) {
+            console.error('Error saving auth:', error);
+        }
+    }
+    
+    // Clear authentication data
+    clearAuth() {
+        this.token = null;
+        this.username = null;
+        this.gistId = null;
+        
+        try {
+            localStorage.removeItem('nutrisnap_auth');
+        } catch (error) {
+            console.error('Error clearing auth:', error);
+        }
+    }
+    
+    // Handle authentication errors
+    handleAuthError(error) {
+        console.error('Auth error:', error);
+        this.clearAuth();
+        this.notifySyncStatus('auth_error');
+    }
+    
+    // Check if authenticated
+    isAuthenticated() {
+        return !!this.token && !!this.gistId;
+    }
+    
+    // Sync a single meal
+    async syncMeal(meal) {
+        if (!this.isAuthenticated() || !navigator.onLine) {
+            await this.saveMealLocally(meal);
+            this.showNotification('✅ Meal saved locally (will sync when online)');
+        } else {
+            await this.saveMealLocally(meal);
+            this.syncData();
+            this.showNotification('✅ Meal saved and synced!');
+        }
+        
+        this.updateSyncUI();
+    }
+    
+    // Sync all meals
+    async syncAllMeals(meals) {
+        if (!this.isAuthenticated()) {
+            this.showError('Please authenticate first');
+            return;
+        }
+        
+        this.notifySyncStatus('syncing');
+        
+        try {
+            // Mark all meals as pending
+            const transaction = this.localDB.transaction(['meals'], 'readwrite');
+            const mealStore = transaction.objectStore('meals');
+            
+            for (const meal of meals) {
+                const request = mealStore.get(meal.id);
+                
+                await new Promise((resolve, reject) => {
+                    request.onsuccess = () => {
+                        const storedMeal = request.result;
+                        if (storedMeal) {
+                            storedMeal.syncStatus = 'pending';
+                            mealStore.put(storedMeal);
+                        }
+                        resolve();
+                    };
+                    
+                    request.onerror = () => {
+                        reject(request.error);
+                    };
+                });
+            }
+            
+            // Start sync
+            await this.syncData();
+            
+            this.showNotification('✅ All meals synced successfully!');
+        } catch (error) {
+            console.error('Error syncing all meals:', error);
+            this.showError('Failed to sync all meals: ' + error.message);
+        }
+    }
+    
+    // Update sync UI
+    updateSyncUI() {
+        const syncStatus = document.getElementById('syncStatus');
+        const syncIcon = document.getElementById('syncIcon');
+        const syncText = document.getElementById('syncText');
+        const syncButton = document.getElementById('syncButton');
+        
+        if (!syncStatus || !syncIcon || !syncText || !syncButton) return;
+        
+        if (!navigator.onLine) {
+            syncStatus.className = 'sync-status';
+            syncIcon.textContent = '🔄';
+            syncText.textContent = 'Offline Mode';
+            syncButton.textContent = 'Enable Backup';
+        } else if (!this.isAuthenticated()) {
+            syncStatus.className = 'sync-status';
+            syncIcon.textContent = '🔄';
+            syncText.textContent = 'Cloud Backup Not Enabled';
+            syncButton.textContent = 'Enable Backup';
+        } else if (this.syncInProgress) {
+            syncStatus.className = 'sync-status syncing';
+            syncIcon.textContent = '🔄';
+            syncText.textContent = 'Syncing...';
+            syncButton.textContent = 'Syncing...';
+        } else {
+            syncStatus.className = 'sync-status synced';
+            syncIcon.textContent = '✅';
+            syncText.textContent = 'Synced with GitHub Gist';
+            syncButton.textContent = 'Sync Now';
+        }
+    }
+    
+    // Notify sync status change
+    notifySyncStatus(status, message = '') {
+        // Update UI
+        this.updateSyncUI();
+        
+        // Dispatch event for other components
+        window.dispatchEvent(new CustomEvent('gistSyncStatusChange', {
+            detail: { status, message }
+        }));
+    }
+    
+    // Show error message
+    showError(message) {
+        console.error(message);
+        
+        // Show notification
+        this.showNotification('❌ ' + message);
+    }
+    
+    // Show notification
+    showNotification(message) {
+        // Remove existing notification
+        const existingNotification = document.querySelector('.notification');
+        if (existingNotification) {
+            existingNotification.remove();
+        }
+        
+        // Create new notification
+        const notification = document.createElement('div');
+        notification.className = 'notification';
+        notification.textContent = message;
+        
+        document.body.appendChild(notification);
+        
+        // Remove after 3 seconds
+        setTimeout(() => {
+            notification.remove();
+        }, 3000);
+    }
+    
+    // Generate device ID
     generateDeviceId() {
         let deviceId = localStorage.getItem('nutrisnap_device_id');
+        
         if (!deviceId) {
             deviceId = 'device_' + Math.random().toString(36).substring(2, 15);
             localStorage.setItem('nutrisnap_device_id', deviceId);
         }
+        
         return deviceId;
     }
+    
+    // Get or create encryption key
+    getOrCreateEncryptionKey() {
+        let key = localStorage.getItem('nutrisnap_encryption_key');
+        
+        if (!key) {
+            // Generate a random key
+            const array = new Uint8Array(32);
+            window.crypto.getRandomValues(array);
+            key = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+            
+            localStorage.setItem('nutrisnap_encryption_key', key);
+        }
+        
+        return key;
+    }
+    
+    // Encrypt data
+    encrypt(text, key) {
+        // Simple XOR encryption for demonstration
+        // In production, use a proper encryption library
+        const textBytes = new TextEncoder().encode(text);
+        const keyBytes = new TextEncoder().encode(key);
+        
+        const encrypted = new Uint8Array(textBytes.length);
+        for (let i = 0; i < textBytes.length; i++) {
+            encrypted[i] = textBytes[i] ^ keyBytes[i % keyBytes.length];
+        }
+        
+        return Array.from(encrypted, b => b.toString(16).padStart(2, '0')).join('');
+    }
+    
+    // Decrypt data
+    decrypt(encryptedHex, key) {
+        // Simple XOR decryption for demonstration
+        const encrypted = new Uint8Array(encryptedHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+        const keyBytes = new TextEncoder().encode(key);
+        
+        const decrypted = new Uint8Array(encrypted.length);
+        for (let i = 0; i < encrypted.length; i++) {
+            decrypted[i] = encrypted[i] ^ keyBytes[i % keyBytes.length];
+        }
+        
+        return new TextDecoder().decode(decrypted);
+    }
 }
+
+// Initialize the gist storage system
+window.gistStorage = new GistStorage();
