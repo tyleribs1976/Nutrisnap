@@ -20,15 +20,20 @@
     <link rel="icon" type="image/png" sizes="16x16" href="icon-16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
     
+    <!-- GitHub Gist Sync Script -->
+    <script src="gist-sync.js"></script>
+    
     <style>
         :root {
             --primary: #4F46E5;
             --primary-dark: #3730A3;
             --success: #10B981;
             --warning: #F59E0B;
+            --danger: #DC2626;
             --gray-50: #F9FAFB;
             --gray-100: #F3F4F6;
             --gray-200: #E5E7EB;
+            --gray-300: #D1D5DB;
             --gray-600: #4B5563;
             --gray-700: #374151;
             --gray-900: #111827;
@@ -112,6 +117,74 @@
             color: var(--gray-600);
             text-transform: uppercase;
             letter-spacing: 0.05em;
+        }
+
+        /* Cloud Sync Status Bar */
+        .sync-status {
+            background: #F3F4F6;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #E5E7EB;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .sync-content {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            max-width: 600px;
+            width: 100%;
+        }
+
+        .sync-icon {
+            font-size: 1.25rem;
+        }
+
+        .sync-text {
+            flex: 1;
+            font-size: 0.875rem;
+            color: #4B5563;
+        }
+
+        .sync-button {
+            padding: 0.5rem 1rem;
+            background: #4F46E5;
+            color: white;
+            border: none;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .sync-status.syncing .sync-icon {
+            animation: spin 1s linear infinite;
+        }
+
+        .sync-status.synced {
+            background: #D1FAE5;
+        }
+
+        .sync-status.synced .sync-text {
+            color: #065F46;
+        }
+
+        .sync-status.error {
+            background: #FEE2E2;
+        }
+
+        .sync-status.error .sync-text {
+            color: #991B1B;
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         .camera-section {
@@ -458,65 +531,6 @@
             display: none !important;
         }
 
-        .sync-status {
-            font-size: 0.75rem;
-            color: var(--gray-600);
-            text-align: center;
-            padding: 0.5rem;
-            background: var(--gray-50);
-            border-radius: 0.25rem;
-            margin-top: 1rem;
-        }
-
-        .sync-status.syncing {
-            color: var(--primary);
-        }
-
-        .sync-status.error {
-            color: #DC2626;
-        }
-
-        .sync-status.success {
-            color: var(--success);
-        }
-
-        .sync-indicator {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 0.25rem;
-        }
-
-        .sync-indicator.offline {
-            background-color: var(--gray-600);
-        }
-
-        .sync-indicator.syncing {
-            background-color: var(--primary);
-            animation: pulse 1.5s infinite;
-        }
-
-        .sync-indicator.synced {
-            background-color: var(--success);
-        }
-
-        .sync-indicator.error {
-            background-color: #DC2626;
-        }
-
-        @keyframes pulse {
-            0% {
-                opacity: 1;
-            }
-            50% {
-                opacity: 0.5;
-            }
-            100% {
-                opacity: 1;
-            }
-        }
-
         @media (max-width: 600px) {
             .context-grid {
                 grid-template-columns: repeat(2, 1fr);
@@ -553,6 +567,15 @@
                 </div>
             </div>
 
+            <!-- Cloud Sync Status -->
+            <div id="syncStatus" class="sync-status hidden">
+                <div class="sync-content">
+                    <span class="sync-icon">☁️</span>
+                    <span class="sync-text">Offline Mode</span>
+                    <button class="sync-button" id="syncButton">Enable Backup</button>
+                </div>
+            </div>
+
             <section class="camera-section">
                 <!-- Meal Context Selection -->
                 <div class="meal-context-selector">
@@ -586,363 +609,140 @@
                     <div class="time-option" data-time="other">🕐 Other</div>
                 </div>
 
-                <!-- Restaurant Info (shown when restaurant is selected) -->
+                <!-- Restaurant Info (conditionally shown) -->
                 <div class="restaurant-info hidden" id="restaurantInfo">
-                    <label>
-                        <strong>Restaurant Name</strong>
-                        <input type="text" id="restaurantName" placeholder="e.g. Joe's Pizza, Chipotle, etc.">
-                    </label>
+                    <label for="restaurantName">Restaurant Name:</label>
+                    <input type="text" id="restaurantName" placeholder="Enter restaurant name">
                 </div>
 
-                <!-- Photo Capture Buttons -->
-                <button class="btn btn-secondary" id="galleryBtn">
-                    <span>🖼️</span>
-                    <span>Select from Gallery</span>
+                <!-- Photo Buttons -->
+                <button class="btn btn-secondary" id="takePhotoBtn">
+                    📸 Take Food Photo
                 </button>
-                
-                <button class="btn btn-primary" id="captureBtn">
-                    <span>📷</span>
-                    <span>Take Photo</span>
+                <button class="btn btn-secondary" id="takeMenuPhotoBtn">
+                    📄 Take Menu Photo
+                </button>
+                <button class="btn btn-primary" id="saveMealBtn">
+                    💾 Save Meal
                 </button>
 
                 <!-- Photo Preview -->
                 <div class="photo-preview hidden" id="photoPreview">
-                    <div class="photo-count" id="photoCount">0 photos added</div>
+                    <h3 class="section-title">Photos</h3>
+                    <div class="photo-count" id="photoCount">0 photos</div>
                     <div class="photo-grid" id="photoGrid"></div>
-                    
-                    <button class="btn btn-secondary hidden" id="addMenuPhotoBtn">
-                        <span>📋</span>
-                        <span>Add Menu Photo</span>
-                    </button>
-                    
-                    <button class="btn btn-primary" id="saveMealBtn">
-                        <span>💾</span>
-                        <span>Save Meal</span>
-                    </button>
-                </div>
-                
-                <!-- Sync Status -->
-                <div class="sync-status" id="syncStatus">
-                    <span class="sync-indicator offline"></span>
-                    <span id="syncStatusText">Offline mode - data will sync when online</span>
                 </div>
             </section>
 
             <section class="meals-section">
                 <h2>Recent Meals</h2>
-                <div id="mealsList">
-                    <div class="loading">
-                        <span>No meals yet. Take a photo to get started!</span>
-                    </div>
-                </div>
+                <div id="mealsList"></div>
             </section>
         </div>
     </div>
 
-    <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden">
-    <input type="file" id="galleryInput" accept="image/*" multiple class="hidden">
-
     <script>
-        // Main App Class with Data Collection Focus and Database Sync
         class NutriSnap {
             constructor() {
-                this.currentPhotos = [];
-                this.selectedContext = 'self-prepared';
-                this.selectedTime = 'breakfast';
-                this.meals = [];
-                this.syncQueue = [];
-                this.isOnline = navigator.onLine;
-                this.syncStatus = 'offline'; // 'offline', 'syncing', 'synced', 'error'
-                this.apiEndpoint = 'https://api.nutrisnap.example.com/meals'; // Replace with actual API endpoint
-                this.userId = this.getUserId();
-                
-                this.initElements();
-                this.bindEvents();
-                this.loadMeals();
-                this.updateUI();
-                this.registerServiceWorker();
-                this.setupSyncListeners();
-                
-                // Initial sync attempt if online
-                if (this.isOnline) {
-                    this.syncWithServer();
-                }
-            }
-
-            initElements() {
-                // Photo inputs
-                this.captureBtn = document.getElementById('captureBtn');
-                this.galleryBtn = document.getElementById('galleryBtn');
-                this.photoInput = document.getElementById('photoInput');
-                this.galleryInput = document.getElementById('galleryInput');
-                
-                // Photo preview
+                // Elements
+                this.contextOptions = document.querySelectorAll('.context-option');
+                this.timeOptions = document.querySelectorAll('.time-option');
+                this.takePhotoBtn = document.getElementById('takePhotoBtn');
+                this.takeMenuPhotoBtn = document.getElementById('takeMenuPhotoBtn');
+                this.saveMealBtn = document.getElementById('saveMealBtn');
                 this.photoPreview = document.getElementById('photoPreview');
                 this.photoGrid = document.getElementById('photoGrid');
                 this.photoCount = document.getElementById('photoCount');
-                this.saveMealBtn = document.getElementById('saveMealBtn');
-                this.addMenuPhotoBtn = document.getElementById('addMenuPhotoBtn');
-                
-                // Context selectors
-                this.contextOptions = document.querySelectorAll('.context-option');
-                this.timeOptions = document.querySelectorAll('.time-option');
                 this.restaurantInfo = document.getElementById('restaurantInfo');
                 this.restaurantNameInput = document.getElementById('restaurantName');
-                
-                // Lists and stats
                 this.mealsList = document.getElementById('mealsList');
                 this.todayMealsEl = document.getElementById('todayMeals');
                 this.weekMealsEl = document.getElementById('weekMeals');
                 this.dataPointsEl = document.getElementById('dataPoints');
                 
-                // Sync status
-                this.syncStatusEl = document.getElementById('syncStatus');
-                this.syncStatusTextEl = document.getElementById('syncStatusText');
-            }
-
-            bindEvents() {
-                // Photo capture events
-                this.captureBtn.addEventListener('click', () => {
-                    this.photoInput.click();
-                });
-
-                this.galleryBtn.addEventListener('click', () => {
-                    this.galleryInput.click();
-                });
-
-                this.photoInput.addEventListener('change', (e) => {
-                    this.handlePhotoCapture(e.target.files, 'food');
-                });
-
-                this.galleryInput.addEventListener('change', (e) => {
-                    this.handlePhotoCapture(e.target.files, 'food');
-                });
-
-                // Context selection
+                // State
+                this.selectedContext = 'self-prepared';
+                this.selectedTime = 'breakfast';
+                this.currentPhotos = [];
+                this.meals = this.loadMeals();
+                
+                // Initialize cloud storage
+                this.gistStorage = new GistStorage();
+                this.setupCloudSync();
+                
+                // Event listeners
                 this.contextOptions.forEach(option => {
-                    option.addEventListener('click', () => {
-                        this.selectContext(option.dataset.context);
-                    });
+                    option.addEventListener('click', () => this.selectContext(option.dataset.context));
                 });
 
                 this.timeOptions.forEach(option => {
-                    option.addEventListener('click', () => {
-                        this.selectTime(option.dataset.time);
-                    });
+                    option.addEventListener('click', () => this.selectTime(option.dataset.time));
                 });
 
-                // Save meal
-                this.saveMealBtn.addEventListener('click', () => {
-                    this.saveMeal();
-                });
+                this.takePhotoBtn.addEventListener('click', () => this.takePhoto('food'));
+                this.takeMenuPhotoBtn.addEventListener('click', () => this.takePhoto('menu'));
+                this.saveMealBtn.addEventListener('click', () => this.saveMeal());
 
-                // Add menu photo button
-                this.addMenuPhotoBtn.addEventListener('click', () => {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.onchange = (e) => {
-                        this.handlePhotoCapture(e.target.files, 'menu');
-                    };
-                    input.click();
-                });
-            }
-            
-            setupSyncListeners() {
-                // Listen for online/offline events
-                window.addEventListener('online', () => {
-                    this.isOnline = true;
-                    this.showNotification('🌐 Back online! Syncing data...');
-                    this.syncWithServer();
-                });
-                
-                window.addEventListener('offline', () => {
-                    this.isOnline = false;
-                    this.updateSyncStatus('offline');
-                    this.showNotification('📴 You are offline. Data will sync when connection is restored.');
-                });
-                
-                // Set up periodic sync (every 5 minutes when online)
-                setInterval(() => {
-                    if (this.isOnline && this.syncQueue.length > 0) {
-                        this.syncWithServer();
-                    }
-                }, 5 * 60 * 1000);
-            }
-            
-            getUserId() {
-                // Get or create a unique user ID for database sync
-                let userId = localStorage.getItem('nutrisnap_user_id');
-                if (!userId) {
-                    userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-                    localStorage.setItem('nutrisnap_user_id', userId);
-                }
-                return userId;
+                // Initialize UI
+                this.updateUI();
+                this.registerServiceWorker();
             }
 
             selectContext(context) {
                 this.selectedContext = context;
+                
                 this.contextOptions.forEach(option => {
                     option.classList.toggle('active', option.dataset.context === context);
                 });
 
-                // Show/hide restaurant info and menu photo button
-                if (context === 'restaurant') {
-                    this.restaurantInfo.classList.remove('hidden');
-                    if (this.currentPhotos.length > 0) {
-                        this.addMenuPhotoBtn.classList.remove('hidden');
-                    }
-                } else {
-                    this.restaurantInfo.classList.add('hidden');
-                    this.addMenuPhotoBtn.classList.add('hidden');
-                }
+                // Show restaurant name input if restaurant is selected
+                this.restaurantInfo.classList.toggle('hidden', context !== 'restaurant');
             }
 
             selectTime(time) {
                 this.selectedTime = time;
+                
                 this.timeOptions.forEach(option => {
                     option.classList.toggle('active', option.dataset.time === time);
                 });
             }
 
-            async handlePhotoCapture(files, type = 'food') {
-                for (const file of files) {
-                    if (file.type.startsWith('image/')) {
-                        const photo = await this.processPhoto(file, type);
-                        this.currentPhotos.push(photo);
-                    }
-                }
-                this.updatePhotoPreview();
-            }
-
-            async processPhoto(file, type) {
-                return new Promise((resolve) => {
+            takePhoto(type) {
+                // Create a file input for photo selection
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*';
+                input.capture = 'environment';
+                
+                input.onchange = (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    
                     const reader = new FileReader();
-                    reader.onload = async (e) => {
-                        const img = new Image();
-                        img.onload = async () => {
-                            // Compress image for storage
-                            const canvas = document.createElement('canvas');
-                            const ctx = canvas.getContext('2d');
-                            
-                            const maxSize = 800;
-                            let { width, height } = img;
-                            
-                            if (width > height && width > maxSize) {
-                                height = (height * maxSize) / width;
-                                width = maxSize;
-                            } else if (height > maxSize) {
-                                width = (width * maxSize) / height;
-                                height = maxSize;
-                            }
-                            
-                            canvas.width = width;
-                            canvas.height = height;
-                            ctx.drawImage(img, 0, 0, width, height);
-                            
-                            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                            
-                            // Only analyze food photos, not menu photos
-                            let analysis = null;
-                            if (type === 'food') {
-                                this.showNotification('🤖 Analyzing food...');
-                                analysis = await this.analyzeFood(dataUrl);
-                            }
-                            
-                            resolve({
-                                id: Date.now() + Math.random(),
-                                type: type,
-                                dataUrl,
-                                analysis,
-                                timestamp: new Date().toISOString(),
-                                metadata: {
-                                    originalSize: file.size,
-                                    originalName: file.name,
-                                    width: width,
-                                    height: height
-                                }
-                            });
+                    reader.onload = (event) => {
+                        const photoId = Date.now();
+                        const photo = {
+                            id: photoId,
+                            type: type,
+                            dataUrl: event.target.result,
+                            timestamp: new Date().toISOString()
                         };
-                        img.src = e.target.result;
+                        
+                        // Add photo to current collection
+                        this.currentPhotos.push(photo);
+                        
+                        // If it's a food photo, analyze it
+                        if (type === 'food') {
+                            this.analyzeFood(photo);
+                        }
+                        
+                        this.updatePhotoPreview();
                     };
+                    
                     reader.readAsDataURL(file);
-                });
-            }
-
-            async analyzeFood(imageData) {
-                // Simulate AI analysis with multiple food detection
-                await new Promise(resolve => setTimeout(resolve, 1500));
-                
-                // More comprehensive food database for better data collection
-                const foodDatabase = [
-                    { name: 'Grilled Chicken', calories: 165, protein: 31, carbs: 0, fat: 3.6 },
-                    { name: 'Caesar Salad', calories: 94, protein: 5, carbs: 4, fat: 7 },
-                    { name: 'Brown Rice', calories: 112, protein: 2.6, carbs: 24, fat: 0.9 },
-                    { name: 'Steamed Broccoli', calories: 35, protein: 2.4, carbs: 7, fat: 0.4 },
-                    { name: 'Pasta Carbonara', calories: 450, protein: 18, carbs: 52, fat: 20 },
-                    { name: 'Vegetable Stir Fry', calories: 280, protein: 8, carbs: 35, fat: 12 },
-                    { name: 'Greek Yogurt', calories: 100, protein: 17, carbs: 6, fat: 0.7 },
-                    { name: 'Mixed Berries', calories: 60, protein: 1, carbs: 14, fat: 0.5 },
-                    { name: 'Turkey Sandwich', calories: 380, protein: 25, carbs: 40, fat: 15 },
-                    { name: 'Quinoa Bowl', calories: 222, protein: 8, carbs: 39, fat: 3.6 },
-                    { name: 'Salmon Fillet', calories: 206, protein: 22, carbs: 0, fat: 12 },
-                    { name: 'French Fries', calories: 312, protein: 3.4, carbs: 41, fat: 15 }
-                ];
-                
-                // Simulate detecting multiple foods in the image
-                const numFoods = Math.floor(Math.random() * 3) + 1;
-                const detectedFoods = [];
-                const usedIndices = new Set();
-                
-                for (let i = 0; i < numFoods; i++) {
-                    let index;
-                    do {
-                        index = Math.floor(Math.random() * foodDatabase.length);
-                    } while (usedIndices.has(index));
-                    
-                    usedIndices.add(index);
-                    const food = foodDatabase[index];
-                    
-                    detectedFoods.push({
-                        name: food.name,
-                        confidence: Math.floor(Math.random() * 20) + 75, // 75-94% confidence
-                        nutrition: {
-                            calories: food.calories,
-                            protein: food.protein,
-                            carbs: food.carbs,
-                            fat: food.fat
-                        },
-                        portion: this.estimatePortion()
-                    });
-                }
-                
-                // Calculate total nutrition
-                const totalNutrition = detectedFoods.reduce((total, food) => {
-                    const multiplier = food.portion.multiplier;
-                    return {
-                        calories: total.calories + (food.nutrition.calories * multiplier),
-                        protein: total.protein + (food.nutrition.protein * multiplier),
-                        carbs: total.carbs + (food.nutrition.carbs * multiplier),
-                        fat: total.fat + (food.nutrition.fat * multiplier)
-                    };
-                }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
-                
-                return {
-                    detectedFoods,
-                    totalNutrition,
-                    analysisTimestamp: new Date().toISOString(),
-                    modelVersion: '1.0-beta'
                 };
-            }
-
-            estimatePortion() {
-                const portions = [
-                    { size: 'Small', multiplier: 0.75 },
-                    { size: 'Medium', multiplier: 1.0 },
-                    { size: 'Large', multiplier: 1.5 }
-                ];
                 
-                return portions[Math.floor(Math.random() * portions.length)];
+                input.click();
             }
 
             updatePhotoPreview() {
@@ -950,31 +750,91 @@
                     this.photoPreview.classList.add('hidden');
                     return;
                 }
-
+                
                 this.photoPreview.classList.remove('hidden');
-                this.photoCount.textContent = `${this.currentPhotos.length} photo${this.currentPhotos.length > 1 ? 's' : ''} added`;
-
-                // Show menu photo button for restaurant meals
-                if (this.selectedContext === 'restaurant' && !this.currentPhotos.some(p => p.type === 'menu')) {
-                    this.addMenuPhotoBtn.classList.remove('hidden');
-                }
-
-                // Render photo grid
-                this.photoGrid.innerHTML = this.currentPhotos.map((photo, index) => `
-                    <div class="photo-item ${photo.type === 'menu' ? 'menu-photo' : ''}">
-                        <img src="${photo.dataUrl}" alt="${photo.type} photo">
-                        ${photo.type === 'menu' ? '<div class="photo-label">Menu</div>' : ''}
-                        <button class="photo-remove" onclick="app.removePhoto(${index})">×</button>
-                    </div>
-                `).join('');
+                this.photoCount.textContent = `${this.currentPhotos.length} photo${this.currentPhotos.length !== 1 ? 's' : ''}`;
+                
+                this.photoGrid.innerHTML = this.currentPhotos.map(photo => {
+                    return `
+                        <div class="photo-item ${photo.type === 'menu' ? 'menu-photo' : ''}">
+                            <img src="${photo.dataUrl}" alt="${photo.type} photo">
+                            <div class="photo-label">${photo.type === 'menu' ? 'Menu' : 'Food'}</div>
+                            <button class="photo-remove" data-id="${photo.id}">×</button>
+                        </div>
+                    `;
+                }).join('');
+                
+                // Add event listeners to remove buttons
+                this.photoGrid.querySelectorAll('.photo-remove').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const photoId = parseInt(btn.dataset.id);
+                        this.removePhoto(photoId);
+                    });
+                });
             }
 
-            removePhoto(index) {
-                this.currentPhotos.splice(index, 1);
+            removePhoto(photoId) {
+                this.currentPhotos = this.currentPhotos.filter(p => p.id !== photoId);
                 this.updatePhotoPreview();
             }
 
-            saveMeal() {
+            analyzeFood(photo) {
+                // Simulate AI food detection
+                setTimeout(() => {
+                    // This is a simulated AI analysis
+                    // In a real app, this would call a real AI service
+                    const foods = [
+                        { name: 'Salad', confidence: 92 },
+                        { name: 'Chicken', confidence: 87 },
+                        { name: 'Rice', confidence: 76 }
+                    ];
+                    
+                    // Randomly select 1-3 foods
+                    const numFoods = Math.floor(Math.random() * 3) + 1;
+                    const detectedFoods = [];
+                    
+                    for (let i = 0; i < numFoods; i++) {
+                        const randomIndex = Math.floor(Math.random() * foods.length);
+                        const food = foods[randomIndex];
+                        
+                        // Add some randomness to confidence
+                        const confidence = Math.max(50, Math.min(99, food.confidence + (Math.random() * 10 - 5)));
+                        
+                        detectedFoods.push({
+                            name: food.name,
+                            confidence: Math.round(confidence)
+                        });
+                        
+                        // Remove this food to avoid duplicates
+                        foods.splice(randomIndex, 1);
+                        
+                        if (foods.length === 0) break;
+                    }
+                    
+                    // Generate random nutrition values
+                    const totalNutrition = {
+                        calories: Math.round(300 + Math.random() * 500),
+                        protein: Math.round(10 + Math.random() * 30),
+                        carbs: Math.round(20 + Math.random() * 60),
+                        fat: Math.round(5 + Math.random() * 25)
+                    };
+                    
+                    // Add analysis to photo
+                    const photoIndex = this.currentPhotos.findIndex(p => p.id === photo.id);
+                    if (photoIndex >= 0) {
+                        this.currentPhotos[photoIndex].analysis = {
+                            detectedFoods,
+                            totalNutrition,
+                            timestamp: new Date().toISOString()
+                        };
+                    }
+                    
+                    // Show notification
+                    this.showNotification('🔍 AI analysis complete');
+                }, 1500);
+            }
+
+            async saveMeal() {
                 if (this.currentPhotos.length === 0) {
                     this.showNotification('⚠️ Please add at least one photo');
                     return;
@@ -988,22 +848,14 @@
                     photos: this.currentPhotos,
                     restaurantName: this.selectedContext === 'restaurant' ? this.restaurantNameInput.value : null,
                     analysis: this.compileMealAnalysis(),
-                    dataCollectionVersion: '1.0',
-                    userId: this.userId,
-                    syncStatus: 'pending' // 'pending', 'synced', 'error'
+                    dataCollectionVersion: '1.0'
                 };
 
                 this.meals.unshift(meal);
                 this.saveMeals();
                 
-                // Add to sync queue
-                this.syncQueue.push(meal.id);
-                this.saveToSyncQueue();
-                
-                // Try to sync immediately if online
-                if (this.isOnline) {
-                    this.syncWithServer();
-                }
+                // Save to cloud storage
+                const saveResult = await this.gistStorage.saveMeal(meal);
                 
                 // Reset form
                 this.currentPhotos = [];
@@ -1011,7 +863,13 @@
                 this.updatePhotoPreview();
                 this.updateUI();
                 
-                this.showNotification('✅ Meal saved successfully!');
+                if (saveResult.pendingSync) {
+                    this.showNotification('✅ Meal saved locally (will sync when online)');
+                } else {
+                    this.showNotification('✅ Meal saved and synced!');
+                }
+                
+                this.updateSyncUI();
             }
 
             compileMealAnalysis() {
@@ -1143,109 +1001,96 @@
                             <div style="font-size: 0.75rem; color: var(--gray-600); margin-top: 0.5rem;">
                                 ${meal.time} • ${dateStr} • ${meal.photos.length} photo${meal.photos.length > 1 ? 's' : ''}
                                 ${meal.analysis && meal.analysis.hasMenuPhoto ? ' • Menu included' : ''}
-                                <span style="float: right;" title="Sync status: ${meal.syncStatus}">${syncStatusIcon}</span>
+                                <span style="float: right;" title="Sync status: ${meal.syncStatus || 'pending'}">${syncStatusIcon}</span>
                             </div>
                         </div>
                     `;
                 }).join('');
             }
             
-            async syncWithServer() {
-                if (this.syncQueue.length === 0) {
-                    this.updateSyncStatus('synced');
-                    return;
-                }
+            async setupCloudSync() {
+                // Show sync status bar
+                document.getElementById('syncStatus').classList.remove('hidden');
                 
-                this.updateSyncStatus('syncing');
+                // Update sync UI
+                this.updateSyncUI();
                 
-                try {
-                    // Process each meal in the sync queue
-                    for (const mealId of [...this.syncQueue]) {
-                        const meal = this.meals.find(m => m.id === mealId);
-                        
-                        if (!meal) {
-                            // Remove from queue if meal no longer exists
-                            this.syncQueue = this.syncQueue.filter(id => id !== mealId);
-                            continue;
-                        }
-                        
-                        // Update meal status to syncing
-                        meal.syncStatus = 'syncing';
-                        this.saveMeals();
-                        this.renderMeals();
-                        
-                        try {
-                            // Simulate API call to sync meal data
-                            await this.simulateApiCall(meal);
-                            
-                            // Update meal status to synced
-                            meal.syncStatus = 'synced';
-                            
-                            // Remove from sync queue
-                            this.syncQueue = this.syncQueue.filter(id => id !== mealId);
-                        } catch (error) {
-                            console.error('Error syncing meal:', error);
-                            meal.syncStatus = 'error';
-                        }
-                        
-                        // Save changes
-                        this.saveMeals();
-                        this.saveToSyncQueue();
-                        this.renderMeals();
-                    }
+                // Listen for sync events
+                window.addEventListener('sync-status-changed', (e) => {
+                    this.updateSyncUI();
                     
-                    // Update sync status based on remaining queue
-                    if (this.syncQueue.length === 0) {
-                        this.updateSyncStatus('synced');
-                    } else {
-                        this.updateSyncStatus('error');
+                    if (e.detail.status === 'synced' && e.detail.mealsSynced > 0) {
+                        this.showNotification(`☁️ Synced ${e.detail.mealsSynced} meals`);
                     }
-                } catch (error) {
-                    console.error('Sync error:', error);
-                    this.updateSyncStatus('error');
-                }
-            }
-            
-            async simulateApiCall(meal) {
-                // Simulate API call with random success/failure
-                await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000));
+                });
                 
-                // Simulate 90% success rate
-                if (Math.random() > 0.1) {
-                    return { success: true, id: meal.id };
+                window.addEventListener('gist-sync-error', (e) => {
+                    this.showNotification(`❌ ${e.detail.message}`);
+                });
+                
+                // Set up sync button
+                document.getElementById('syncButton').addEventListener('click', async () => {
+                    if (this.gistStorage.isAuthenticated()) {
+                        // Manual sync
+                        this.gistStorage.syncData();
+                    } else {
+                        // Enable backup
+                        const success = await this.gistStorage.enableCloudBackup();
+                        if (success) {
+                            this.showNotification('☁️ Cloud backup enabled!');
+                            this.updateSyncUI();
+                            
+                            // Sync existing meals
+                            await this.syncExistingMeals();
+                        }
+                    }
+                });
+            }
+
+            updateSyncUI() {
+                const syncStatus = this.gistStorage.getSyncStatus();
+                const statusEl = document.getElementById('syncStatus');
+                const iconEl = statusEl.querySelector('.sync-icon');
+                const textEl = statusEl.querySelector('.sync-text');
+                const buttonEl = statusEl.querySelector('.sync-button');
+                
+                // Reset classes
+                statusEl.classList.remove('syncing', 'synced', 'error');
+                
+                if (!syncStatus.authenticated) {
+                    iconEl.textContent = '☁️';
+                    textEl.textContent = 'Offline Mode';
+                    buttonEl.textContent = 'Enable Backup';
+                    buttonEl.style.display = 'block';
+                } else if (syncStatus.syncInProgress) {
+                    statusEl.classList.add('syncing');
+                    iconEl.textContent = '🔄';
+                    textEl.textContent = 'Syncing...';
+                    buttonEl.style.display = 'none';
+                } else if (!syncStatus.online) {
+                    iconEl.textContent = '📵';
+                    textEl.textContent = `Offline - ${syncStatus.pendingItems} pending`;
+                    buttonEl.style.display = 'none';
+                } else if (syncStatus.pendingItems > 0) {
+                    iconEl.textContent = '⏳';
+                    textEl.textContent = `${syncStatus.pendingItems} items pending sync`;
+                    buttonEl.textContent = 'Sync Now';
+                    buttonEl.style.display = 'block';
                 } else {
-                    throw new Error('API error');
+                    statusEl.classList.add('synced');
+                    iconEl.textContent = '✅';
+                    const lastSync = syncStatus.lastSync ? 
+                        new Date(syncStatus.lastSync).toLocaleTimeString() : 'Never';
+                    textEl.textContent = `Synced at ${lastSync}`;
+                    buttonEl.style.display = 'none';
                 }
             }
-            
-            updateSyncStatus(status) {
-                this.syncStatus = status;
-                
-                // Update UI
-                this.syncStatusEl.className = 'sync-status ' + status;
-                const indicator = this.syncStatusEl.querySelector('.sync-indicator');
-                if (indicator) {
-                    indicator.className = 'sync-indicator ' + status;
+
+            async syncExistingMeals() {
+                // Sync any meals already in localStorage
+                for (const meal of this.meals) {
+                    await this.gistStorage.saveMeal(meal);
                 }
-                
-                // Update text
-                let statusText = '';
-                switch (status) {
-                    case 'offline':
-                        statusText = 'Offline mode - data will sync when online';
-                        break;
-                    case 'syncing':
-                        statusText = 'Syncing data with server...';
-                        break;
-                    case 'synced':
-                        statusText = 'All data synced with server';
-                        break;
-                    case 'error':
-                        statusText = 'Sync error - will retry automatically';
-                        break;
-                }
-                
-                this.syncStatusTextEl.textContent = statusText;
             }
 
             showNotification(message) {
@@ -1261,21 +1106,15 @@
 
             loadMeals() {
                 try {
-                    this.meals = JSON.parse(localStorage.getItem('nutrisnap_meals') || '[]');
-                    this.syncQueue = JSON.parse(localStorage.getItem('nutrisnap_sync_queue') || '[]');
+                    return JSON.parse(localStorage.getItem('nutrisnap_meals') || '[]');
                 } catch (error) {
                     console.error('Error loading data:', error);
-                    this.meals = [];
-                    this.syncQueue = [];
+                    return [];
                 }
             }
 
             saveMeals() {
                 localStorage.setItem('nutrisnap_meals', JSON.stringify(this.meals));
-            }
-            
-            saveToSyncQueue() {
-                localStorage.setItem('nutrisnap_sync_queue', JSON.stringify(this.syncQueue));
             }
 
             registerServiceWorker() {
