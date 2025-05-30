@@ -73,6 +73,7 @@
             padding: 1.5rem;
             text-align: center;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            position: relative; /* For settings button positioning */
         }
 
         .app-header h1 {
@@ -84,6 +85,20 @@
         .app-header p {
             font-size: 0.875rem;
             opacity: 0.9;
+        }
+        
+        /* Settings Button */
+        .settings-btn {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            line-height: 1;
         }
 
         .app-content {
@@ -530,6 +545,98 @@
         .hidden {
             display: none !important;
         }
+        
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            padding: 20px;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+        
+        .modal-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            max-width: 500px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+            transform: scale(0.9);
+            transition: transform 0.3s;
+        }
+        
+        .modal-overlay.visible .modal-content {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--gray-200);
+            padding-bottom: 1rem;
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .modal-close-btn {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--gray-600);
+            padding: 0.5rem;
+            line-height: 1;
+        }
+        
+        /* Calendar Placeholder */
+        .calendar-container {
+            background: var(--gray-100);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            text-align: center;
+            color: var(--gray-600);
+        }
+        
+        /* Historical Meals */
+        .historical-meals-list {
+            margin-top: 1rem;
+        }
+        
+        .historical-date-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .historical-date-header {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--primary);
+        }
 
         @media (max-width: 600px) {
             .context-grid {
@@ -549,6 +656,7 @@
         <header class="app-header">
             <h1>🍽️ NutriSnap</h1>
             <p>Smart meal tracking & data collection</p>
+            <button class="settings-btn" id="settingsBtn" aria-label="Settings">⚙️</button>
         </header>
 
         <div class="app-content">
@@ -640,6 +748,30 @@
             </section>
         </div>
     </div>
+    
+    <!-- Advanced Settings Modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Advanced Settings</h2>
+                <button class="modal-close-btn" id="closeSettingsBtn" aria-label="Close">×</button>
+            </div>
+            <div class="modal-body">
+                <h3>Load Meals from Previous Day</h3>
+                <div class="calendar-container" id="calendarContainer">
+                    <!-- Calendar Picker will be initialized here -->
+                    <p>Calendar Picker Placeholder</p>
+                    <input type="date" id="historicalDateInput">
+                    <button id="loadHistoricalMealsBtn">Load Meals</button>
+                </div>
+                
+                <div class="historical-meals-list" id="historicalMealsList">
+                    <!-- Historical meals will be loaded here -->
+                    <p>Select a date to load meals.</p>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script>
         class NutriSnap {
@@ -659,6 +791,12 @@
                 this.todayMealsEl = document.getElementById('todayMeals');
                 this.weekMealsEl = document.getElementById('weekMeals');
                 this.dataPointsEl = document.getElementById('dataPoints');
+                this.settingsBtn = document.getElementById('settingsBtn');
+                this.settingsModal = document.getElementById('settingsModal');
+                this.closeSettingsBtn = document.getElementById('closeSettingsBtn');
+                this.historicalDateInput = document.getElementById('historicalDateInput');
+                this.loadHistoricalMealsBtn = document.getElementById('loadHistoricalMealsBtn');
+                this.historicalMealsList = document.getElementById('historicalMealsList');
                 
                 // State
                 this.selectedContext = 'self-prepared';
@@ -682,11 +820,79 @@
                 this.takePhotoBtn.addEventListener('click', () => this.takePhoto('food'));
                 this.takeMenuPhotoBtn.addEventListener('click', () => this.takePhoto('menu'));
                 this.saveMealBtn.addEventListener('click', () => this.saveMeal());
+                
+                // Settings Modal Listeners
+                this.settingsBtn.addEventListener('click', () => this.openSettingsModal());
+                this.closeSettingsBtn.addEventListener('click', () => this.closeSettingsModal());
+                this.settingsModal.addEventListener('click', (e) => {
+                    if (e.target === this.settingsModal) { // Close if overlay is clicked
+                        this.closeSettingsModal();
+                    }
+                });
+                this.loadHistoricalMealsBtn.addEventListener('click', () => this.loadHistoricalMeals());
 
                 // Initialize UI
                 this.updateUI();
                 this.registerServiceWorker();
             }
+            
+            // --- Settings Modal --- 
+            openSettingsModal() {
+                this.settingsModal.classList.add('visible');
+            }
+            
+            closeSettingsModal() {
+                this.settingsModal.classList.remove('visible');
+            }
+            
+            async loadHistoricalMeals() {
+                const selectedDate = this.historicalDateInput.value;
+                if (!selectedDate) {
+                    this.showNotification('⚠️ Please select a date.');
+                    return;
+                }
+                
+                this.historicalMealsList.innerHTML = '<p>Loading meals...</p>';
+                
+                // TODO: Implement logic to fetch meals for the selected date
+                // This will likely involve querying IndexedDB or fetching from Gist
+                console.log(`Loading meals for: ${selectedDate}`);
+                
+                // Placeholder for fetched meals
+                const historicalMeals = await this.fetchMealsForDate(selectedDate);
+                
+                this.renderHistoricalMeals(historicalMeals, selectedDate);
+            }
+            
+            async fetchMealsForDate(dateString) {
+                // Placeholder: In a real implementation, fetch from IndexedDB/Gist
+                await new Promise(resolve => setTimeout(resolve, 500)); // Simulate fetch delay
+                
+                // Filter existing meals for demo purposes
+                return this.meals.filter(meal => {
+                    const mealDate = new Date(meal.timestamp).toISOString().split('T')[0];
+                    return mealDate === dateString;
+                });
+            }
+            
+            renderHistoricalMeals(meals, dateString) {
+                if (meals.length === 0) {
+                    this.historicalMealsList.innerHTML = `<p>No meals found for ${dateString}.</p>`;
+                    return;
+                }
+                
+                const dateHeader = new Date(dateString + 'T00:00:00').toLocaleDateString([], {
+                    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+                });
+                
+                this.historicalMealsList.innerHTML = `
+                    <div class="historical-date-group">
+                        <h3 class="historical-date-header">${dateHeader}</h3>
+                        ${meals.map(meal => this.renderMealCard(meal)).join('')}
+                    </div>
+                `;
+            }
+            // --- End Settings Modal --- 
 
             selectContext(context) {
                 this.selectedContext = context;
@@ -848,7 +1054,8 @@
                     photos: this.currentPhotos,
                     restaurantName: this.selectedContext === 'restaurant' ? this.restaurantNameInput.value : null,
                     analysis: this.compileMealAnalysis(),
-                    dataCollectionVersion: '1.0'
+                    dataCollectionVersion: '1.0',
+                    syncStatus: 'pending' // Add initial sync status
                 };
 
                 this.meals.unshift(meal);
@@ -906,7 +1113,7 @@
 
             updateUI() {
                 this.updateStats();
-                this.renderMeals();
+                this.renderRecentMeals(); // Changed from renderMeals
             }
 
             updateStats() {
@@ -932,80 +1139,89 @@
                 this.dataPointsEl.textContent = totalDataPoints;
             }
 
-            renderMeals() {
-                if (this.meals.length === 0) {
+            renderRecentMeals() {
+                // Only render meals from the last 24 hours in the main list
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+                
+                const recentMeals = this.meals.filter(m => new Date(m.timestamp) >= yesterday);
+                
+                if (recentMeals.length === 0) {
                     this.mealsList.innerHTML = `
                         <div class="loading">
-                            <span>No meals yet. Take a photo to get started!</span>
+                            <span>No recent meals. Take a photo to get started!</span>
                         </div>
                     `;
                     return;
                 }
 
-                this.mealsList.innerHTML = this.meals.slice(0, 10).map(meal => {
-                    const date = new Date(meal.timestamp);
-                    const timeStr = date.toLocaleTimeString([], { 
-                        hour: '2-digit', 
-                        minute: '2-digit' 
-                    });
-                    const dateStr = date.toLocaleDateString();
+                this.mealsList.innerHTML = recentMeals.slice(0, 10).map(meal => this.renderMealCard(meal)).join('');
+            }
+            
+            renderMealCard(meal) {
+                const date = new Date(meal.timestamp);
+                const timeStr = date.toLocaleTimeString([], { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                });
+                const dateStr = date.toLocaleDateString();
 
-                    const contextIcons = {
-                        'self-prepared': '🏠',
-                        'restaurant': '🍽️',
-                        'takeout': '🥡',
-                        'snack': '🍿'
-                    };
-                    
-                    // Sync status indicator
-                    const syncStatusIcon = meal.syncStatus === 'synced' ? '✓' : 
-                                          meal.syncStatus === 'error' ? '⚠️' : 
-                                          meal.syncStatus === 'syncing' ? '↻' : '⌛';
+                const contextIcons = {
+                    'self-prepared': '🏠',
+                    'restaurant': '🍽️',
+                    'takeout': '🥡',
+                    'snack': '🍿'
+                };
+                
+                // Sync status indicator
+                const syncStatus = meal.syncStatus || 'pending'; // Default to pending if undefined
+                const syncStatusIcon = syncStatus === 'synced' ? '✓' : 
+                                      syncStatus === 'error' ? '⚠️' : 
+                                      syncStatus === 'syncing' ? '🔄' : '⏳'; // Use 🔄 for syncing
 
-                    return `
-                        <div class="meal-card">
-                            <div class="meal-header">
-                                <div>
-                                    <span class="meal-context-badge ${meal.context}">
-                                        ${contextIcons[meal.context]} ${meal.context.replace('-', ' ')}
-                                    </span>
-                                    ${meal.restaurantName ? `<span style="font-size: 0.875rem; margin-left: 0.5rem;">${meal.restaurantName}</span>` : ''}
-                                </div>
-                                <span class="meal-time">${timeStr}</span>
+                return `
+                    <div class="meal-card">
+                        <div class="meal-header">
+                            <div>
+                                <span class="meal-context-badge ${meal.context}">
+                                    ${contextIcons[meal.context]} ${meal.context.replace('-', ' ')}
+                                </span>
+                                ${meal.restaurantName ? `<span style="font-size: 0.875rem; margin-left: 0.5rem;">${meal.restaurantName}</span>` : ''}
                             </div>
-                            
-                            <div class="meal-photos">
-                                ${meal.photos.map(photo => `
-                                    <img src="${photo.dataUrl}" class="meal-photo-thumb ${photo.type === 'menu' ? 'menu' : ''}" 
-                                         alt="${photo.type} photo" title="${photo.type === 'menu' ? 'Menu' : 'Food'}">
-                                `).join('')}
-                            </div>
-                            
-                            ${meal.analysis ? `
-                                <div class="meal-analysis">
-                                    <h4>AI Analysis (Beta)</h4>
-                                    <div class="detected-foods">
-                                        ${meal.analysis.detectedFoods.map(food => `
-                                            <span class="food-tag">${food.name} (${food.confidence}%)</span>
-                                        `).join('')}
-                                    </div>
-                                    <div class="nutrition-preview">
-                                        Estimated: ${Math.round(meal.analysis.totalNutrition.calories)} cal • 
-                                        ${Math.round(meal.analysis.totalNutrition.protein)}g protein • 
-                                        ${Math.round(meal.analysis.totalNutrition.carbs)}g carbs • 
-                                        ${Math.round(meal.analysis.totalNutrition.fat)}g fat
-                                    </div>
-                                </div>
-                            ` : ''}
-                            
-                            <div style="font-size: 0.75rem; color: var(--gray-600); margin-top: 0.5rem;">
-                                ${meal.time} • ${dateStr} • ${meal.photos.length} photo${meal.photos.length > 1 ? 's' : ''}
-                                ${meal.analysis && meal.analysis.hasMenuPhoto ? ' • Menu included' : ''}
-                                <span style="float: right;" title="Sync status: ${meal.syncStatus || 'pending'}">${syncStatusIcon}</span>
-                            </div>
+                            <span class="meal-time">${timeStr}</span>
                         </div>
-                    `;
-                }).join('');
+                        
+                        <div class="meal-photos">
+                            ${meal.photos.map(photo => `
+                                <img src="${photo.dataUrl}" class="meal-photo-thumb ${photo.type === 'menu' ? 'menu' : ''}" 
+                                     alt="${photo.type} photo" title="${photo.type === 'menu' ? 'Menu' : 'Food'}">
+                            `).join('')}
+                        </div>
+                        
+                        ${meal.analysis ? `
+                            <div class="meal-analysis">
+                                <h4>AI Analysis (Beta)</h4>
+                                <div class="detected-foods">
+                                    ${meal.analysis.detectedFoods.map(food => `
+                                        <span class="food-tag">${food.name} (${food.confidence}%)</span>
+                                    `).join('')}
+                                </div>
+                                <div class="nutrition-preview">
+                                    Estimated: ${Math.round(meal.analysis.totalNutrition.calories)} cal • 
+                                    ${Math.round(meal.analysis.totalNutrition.protein)}g protein • 
+                                    ${Math.round(meal.analysis.totalNutrition.carbs)}g carbs • 
+                                    ${Math.round(meal.analysis.totalNutrition.fat)}g fat
+                                </div>
+                            </div>
+                        ` : ''}
+                        
+                        <div style="font-size: 0.75rem; color: var(--gray-600); margin-top: 0.5rem;">
+                            ${meal.time} • ${dateStr} • ${meal.photos.length} photo${meal.photos.length > 1 ? 's' : ''}
+                            ${meal.analysis && meal.analysis.hasMenuPhoto ? ' • Menu included' : ''}
+                            <span style="float: right;" title="Sync status: ${syncStatus}">${syncStatusIcon}</span>
+                        </div>
+                    </div>
+                `;
             }
             
             async setupCloudSync() {
@@ -1089,8 +1305,16 @@
             async syncExistingMeals() {
                 // Sync any meals already in localStorage
                 for (const meal of this.meals) {
-                    await this.gistStorage.saveMeal(meal);
+                    // Ensure meal has a syncStatus before attempting sync
+                    if (!meal.syncStatus) {
+                        meal.syncStatus = 'pending';
+                    }
+                    // Only sync meals that are not already synced or syncing
+                    if (meal.syncStatus === 'pending' || meal.syncStatus === 'error') {
+                        await this.gistStorage.saveMeal(meal);
+                    }
                 }
+                this.saveMeals(); // Save updated sync statuses
             }
 
             showNotification(message) {
@@ -1106,39 +1330,5 @@
 
             loadMeals() {
                 try {
-                    return JSON.parse(localStorage.getItem('nutrisnap_meals') || '[]');
-                } catch (error) {
-                    console.error('Error loading data:', error);
-                    return [];
-                }
-            }
-
-            saveMeals() {
-                localStorage.setItem('nutrisnap_meals', JSON.stringify(this.meals));
-            }
-
-            registerServiceWorker() {
-                if ('serviceWorker' in navigator) {
-                    navigator.serviceWorker.register('sw.js')
-                        .then(reg => {
-                            console.log('Service Worker registered');
-                            
-                            // Register for background sync if supported
-                            if ('sync' in reg) {
-                                navigator.serviceWorker.ready.then(swRegistration => {
-                                    return swRegistration.sync.register('nutrisnap-sync');
-                                });
-                            }
-                        })
-                        .catch(err => console.error('Service Worker registration failed:', err));
-                }
-            }
-        }
-
-        const app = new NutriSnap();
-        
-        // Make app available globally for debugging and photo removal
-        window.app = app;
-    </script>
-</body>
-</html>
+                    return JSON.parse(localStorage.getItem('nutrisnap_meals') || '[]
+(Content truncated due to size limit. Use line ranges to read in chunks)
